@@ -4,25 +4,21 @@ on:
   workflow_dispatch:
     inputs:
       kernel_version:
-        description: 'Versão do Kernel (6.1 ou 6.6)'
+        description: 'Versão do Kernel'
         required: true
         default: '6.1'
         type: choice
         options:
           - '6.1'
           - '6.6'
-      kernel_source:
-        description: 'URL do repositório do kernel'
-        required: true
-        default: 'https://github.com/LineageOS/android_kernel_xiaomi_garnet'
-      kernel_branch:
-        description: 'Branch do kernel'
-        required: true
-        default: 'lineage-21'
       device_codename:
         description: 'Codinome do dispositivo'
         required: true
         default: 'garnet'
+        type: choice
+        options:
+          - 'garnet'
+          - 'stone'
 
 jobs:
   build:
@@ -41,87 +37,92 @@ jobs:
             bc bison build-essential ccache curl flex g++-multilib \
             gcc-multilib git gnupg gperf libxml2-utils lzop \
             pngcrush schedtool squashfs-tools xsltproc zip zlib1g-dev \
-            libncurses-dev libssl-dev libelf-dev python3 python3-pip
+            libncurses-dev libssl-dev libelf-dev python3 python3-pip \
+            cpio device-tree-compiler
           sudo pip3 install pyelftools
 
-      - name: Setup KernelSU/SukiSU
+      - name: Setup Toolchain
         run: |
-          git clone https://github.com/SukiSU-Ultra/SukiSU-Ultra.git kernel_patches
-          cd kernel_patches
-          # Pega a última versão estável
-          git checkout main
-          cd ..
+          # Baixa o Clang estável
+          wget -O clang.tar.gz https://github.com/llvm/llvm-project/releases/download/llvmorg-17.0.6/clang+llvm-17.0.6-x86_64-linux-gnu-ubuntu-22.04.tar.xz
+          tar -xf clang.tar.gz
+          mv clang+llvm-17.0.6-x86_64-linux-gnu-ubuntu-22.04 clang
+          
+          # Baixa o GCC para ARM64
+          wget -O gcc.tar.xz https://developer.arm.com/-/media/Files/downloads/gnu/13.2.rel1/binrel/arm-gnu-toolchain-13.2.rel1-x86_64-aarch64-none-linux-gnu.tar.xz
+          tar -xf gcc.tar.xz
+          mv arm-gnu-toolchain-13.2.rel1-x86_64-aarch64-none-linux-gnu gcc
+          
+          export PATH=$PWD/clang/bin:$PWD/gcc/bin:$PATH
+          echo "PATH=$PWD/clang/bin:$PWD/gcc/bin:$PATH" >> $GITHUB_ENV
 
-      - name: Clone Kernel Source
+      - name: Clone Kernel Source (GKI - Generic)
         run: |
-          git clone --depth=1 -b ${{ github.event.inputs.kernel_branch }} \
-            ${{ github.event.inputs.kernel_source }} kernel
+          # Usa o kernel GKI padrão da comunidade para garnet
+          git clone --depth=1 -b android14-6.1 https://github.com/LineageOS/android_kernel_xiaomi_sm6375.git kernel || \
+          git clone --depth=1 -b lineage-21 https://github.com/LineageOS/android_kernel_xiaomi_sm6375.git kernel || \
+          git clone --depth=1 https://github.com/LineageOS/android_kernel_xiaomi_sm6375.git kernel
+          
           cd kernel
-          # Verifica se é GKI e prepara
-          if [ -f "build.config.gki" ]; then
-            echo "GKI kernel detected"
-          else
-            echo "Standard kernel detected"
-          fi
+          echo "Kernel cloned successfully!"
 
-      - name: Apply SukiSU Ultra Patches
+      - name: Apply SukiSU Ultra
         run: |
           cd kernel
-          # Aplica o SukiSU Ultra automaticamente
+          # Aplica o SukiSU Ultra
           curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s main
           
-          # Se quiser KPM (Kernel Patch Modules) - descomente a linha abaixo
-          # echo "CONFIG_KPM=y" >> arch/arm64/configs/$(ls arch/arm64/configs/ | grep -E "(garnet|vendor)" | head -1)
+          # Habilita KPM se quiser
+          echo "CONFIG_KPM=y" >> arch/arm64/configs/vendor/garnet_defconfig || \
+          echo "CONFIG_KPM=y" >> arch/arm64/configs/garnet_defconfig || \
+          echo "CONFIG_KPM=y" >> arch/arm64/configs/gki_defconfig
 
-      - name: Configure Kernel
+      - name: Configure and Build
         run: |
           cd kernel
-          # Encontra o arquivo de configuração
-          DEFCONFIG=$(ls arch/arm64/configs/ | grep -E "(garnet|gki|vendor)" | head -1)
-          echo "Using defconfig: $DEFCONFIG"
-          
-          # Prepara o build
           export ARCH=arm64
           export SUBARCH=arm64
           export CROSS_COMPILE=aarch64-linux-gnu-
+          export CC=clang
+          export LD=ld.lld
+          export CLANG_TRIPLE=aarch64-linux-gnu-
+          
+          # Encontra a defconfig
+          DEFCONFIG=$(find arch/arm64/configs -name "*garnet*" -o -name "*gki*" | head -1)
+          if [ -z "$DEFCONFIG" ]; then
+            DEFCONFIG="gki_defconfig"
+          fi
+          DEFCONFIG=$(basename "$DEFCONFIG")
+          echo "Using defconfig: $DEFCONFIG"
           
           # Gera o .config
           make $DEFCONFIG
           
-          # Habilita SukiSU (já aplicado pelo setup.sh)
-          # Habilita KPM se quiser
-          # echo "CONFIG_KPM=y" >> .config
-
-      - name: Build Kernel
-        run: |
-          cd kernel
-          export ARCH=arm64
-          export CROSS_COMPILE=aarch64-linux-gnu-
-          
-          # Compila com todas as threads
+          # Compila
           make -j$(nproc)
-          
-          # Verifica se o Image.gz-dtb foi gerado
-          if [ -f "arch/arm64/boot/Image.gz-dtb" ]; then
+
+      - name: Prepare AnyKernel3
+        run: |
+          # Verifica se o kernel foi compilado
+          if [ -f "kernel/arch/arm64/boot/Image" ]; then
+            echo "Kernel built successfully!"
+            cp kernel/arch/arm64/boot/Image kernel/arch/arm64/boot/Image.gz-dtb
+          elif [ -f "kernel/arch/arm64/boot/Image.gz-dtb" ]; then
             echo "Kernel built successfully!"
           else
             echo "Build failed!"
             exit 1
           fi
-
-      - name: Create AnyKernel3 Package
-        run: |
-          # Clona o AnyKernel3
+          
+          # Clona AnyKernel3
           git clone https://github.com/osm0sis/AnyKernel3.git anykernel
           
-          # Copia o kernel compilado
+          # Copia o kernel
           cp kernel/arch/arm64/boot/Image.gz-dtb anykernel/
           
-          # Cria o arquivo anykernel.sh
+          # Cria o anykernel.sh
           cat > anykernel/anykernel.sh << 'EOF'
           #!/sbin/sh
-          #
-          # AnyKernel3 script
           #
           properties() {
             kernel.string=SukiSU Ultra Kernel ${{ github.event.inputs.kernel_version }}
@@ -130,6 +131,7 @@ jobs:
             do.cleanup=1
             do.cleanuponabort=0
             device.name1=${{ github.event.inputs.device_codename }}
+            device.name2=garnet
             supported.versions=16
           }
           block=/dev/block/bootdevice/by-name/boot
@@ -142,11 +144,11 @@ jobs:
           done
           EOF
           
-          # Cria o zip
+          # Cria ZIP
           cd anykernel
           zip -r ../SukiSU_Kernel_${{ github.event.inputs.kernel_version }}_${{ github.event.inputs.device_codename }}.zip *
 
-      - name: Upload Kernel Package
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: SukiSU-Kernel-${{ github.event.inputs.kernel_version }}
