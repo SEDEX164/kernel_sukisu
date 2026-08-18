@@ -26,7 +26,7 @@ jobs:
 
       - name: Baixar Toolchain (AOSP Clang r488900)
         run: |
-          git clone https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 --depth=1 -b master-kernel-build-2024 clang
+          git clone https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 --depth=1 -b main clang
 
       - name: Integrar SukiSU Ultra
         run: |
