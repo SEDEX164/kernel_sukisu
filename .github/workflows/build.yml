@@ -18,15 +18,18 @@ jobs:
       - name: Instalar Dependências
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential libssl-dev libncurses5-dev bison flex libelf-dev bc zip unzip curl git python3 libssl-dev
+          sudo apt-get install -y build-essential libssl-dev libncurses5-dev bison flex libelf-dev bc zip unzip curl git python3 libssl-dev wget
 
       - name: Baixar Código Fonte do Kernel (crDroid Source)
         run: |
           git clone --depth=1 https://github.com/crdroidandroid/android_xiaomi_kernel_garnet.git -b 16.0 kernel
 
-      - name: Baixar Toolchain (AOSP Clang r488900)
+      - name: Baixar Toolchain (ZyC Clang 18)
         run: |
-          git clone https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 --depth=1 -b main clang
+          mkdir clang
+          wget -q https://github.com/ZyCromerZ/Clang/releases/download/18.0.0-20240322-release/Clang-18.0.0-20240322.tar.gz
+          tar -xf Clang-18.0.0-20240322.tar.gz -C clang
+          rm Clang-18.0.0-20240322.tar.gz
 
       - name: Integrar SukiSU Ultra
         run: |
@@ -44,8 +47,7 @@ jobs:
       - name: Compilar Kernel
         run: |
           cd kernel
-          CLANG_DIR=$(pwd)/../clang/clang-r488900
-          export PATH="${CLANG_DIR}/bin:${PATH}"
+          export PATH="$(pwd)/../clang/bin:${PATH}"
           export ARCH=arm64
           export SUBARCH=arm64
           export CC=clang
