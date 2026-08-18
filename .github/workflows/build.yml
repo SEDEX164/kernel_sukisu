@@ -1,4 +1,4 @@
-name: Compilar Kernel SukiSU Garnet
+name: Compilar Kernel SukiSU Garnet crDroid
 
 on:
   workflow_dispatch:
@@ -20,9 +20,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential libssl-dev libncurses5-dev bison flex libelf-dev bc zip unzip curl git python3
 
-      - name: Baixar Código Fonte do Kernel
+      - name: Baixar Código Fonte do Kernel (crDroid Source)
         run: |
-          git clone --depth=1 https://github.com/LineageOS/android_kernel_xiaomi_sm7435.git -b lineage-21 kernel
+          git clone --depth=1 https://github.com/crdroidandroid/android_xiaomi_kernel_garnet.git -b 16.0 kernel
 
       - name: Baixar Toolchain (Clang)
         run: |
@@ -51,10 +51,10 @@ jobs:
           git clone https://github.com/osm0sis/AnyKernel3.git AnyKernel3
           cp kernel/out/arch/arm64/boot/Image AnyKernel3/
           cd AnyKernel3
-          zip -r9 SukiSU_Kernel_Garnet.zip *
+          zip -r9 SukiSU_Kernel_Garnet_crDroid.zip *
 
       - name: Enviar Arquivo Final (Artifact)
         uses: actions/upload-artifact@v4
         with:
-          name: SukiSU_Kernel_Garnet
-          path: AnyKernel3/SukiSU_Kernel_Garnet.zip
+          name: SukiSU_Kernel_Garnet_crDroid
+          path: AnyKernel3/SukiSU_Kernel_Garnet_crDroid.zip
