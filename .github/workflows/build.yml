@@ -1,91 +1,166 @@
-name: Compilar Kernel SukiSU Garnet crDroid
+name: Build Kernel with SukiSU Ultra
 
 on:
   workflow_dispatch:
+    inputs:
+      kernel_version:
+        description: 'Versão do Kernel (6.1 ou 6.6)'
+        required: true
+        default: '6.1'
+        type: choice
+        options:
+          - '6.1'
+          - '6.6'
+      kernel_source:
+        description: 'URL do repositório do kernel'
+        required: true
+        default: 'https://github.com/LineageOS/android_kernel_xiaomi_garnet'
+      kernel_branch:
+        description: 'Branch do kernel'
+        required: true
+        default: 'lineage-21'
+      device_codename:
+        description: 'Codinome do dispositivo'
+        required: true
+        default: 'garnet'
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    
     steps:
-      - name: Aumentar Espaço em Disco
-        uses: easimon/maximize-build-space@v10
-        with:
-          root-reserve-mb: 8192
-          temp-reserve-mb: 2048
-          remove-dotnet: 'true'
-          remove-android: 'true'
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
-      - name: Instalar Dependências
+      - name: Setup Build Environment
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential libssl-dev libncurses5-dev bison flex libelf-dev bc zip unzip curl git python3 wget
+          sudo apt-get install -y \
+            bc bison build-essential ccache curl flex g++-multilib \
+            gcc-multilib git gnupg gperf libxml2-utils lzop \
+            pngcrush schedtool squashfs-tools xsltproc zip zlib1g-dev \
+            libncurses-dev libssl-dev libelf-dev python3 python3-pip
+          sudo pip3 install pyelftools
 
-      - name: Baixar Código Fonte do Kernel (crDroid Source)
+      - name: Setup KernelSU/SukiSU
         run: |
-          git clone --depth=1 https://github.com/crdroidandroid/android_xiaomi_kernel_garnet.git -b 16.0 kernel
+          git clone https://github.com/SukiSU-Ultra/SukiSU-Ultra.git kernel_patches
+          cd kernel_patches
+          # Pega a última versão estável
+          git checkout main
+          cd ..
 
-      - name: Baixar Toolchain (ZyC Clang 16)
+      - name: Clone Kernel Source
         run: |
-          mkdir -p clang
-          wget -q https://github.com/ZyCromerZ/Clang/releases/download/16.0.6-20260807-release/Clang-16.0.6-20260807.tar.gz -O clang.tar.gz
-          tar -xf clang.tar.gz -C clang
-          rm clang.tar.gz
+          git clone --depth=1 -b ${{ github.event.inputs.kernel_branch }} \
+            ${{ github.event.inputs.kernel_source }} kernel
+          cd kernel
+          # Verifica se é GKI e prepara
+          if [ -f "build.config.gki" ]; then
+            echo "GKI kernel detected"
+          else
+            echo "Standard kernel detected"
+          fi
 
-      - name: Integrar SukiSU Ultra
+      - name: Apply SukiSU Ultra Patches
         run: |
           cd kernel
-          curl -LSs "https://raw.githubusercontent.com/sukisu-ultra/sukisu-ultra/main/kernel/setup.sh" | bash -
+          # Aplica o SukiSU Ultra automaticamente
+          curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s main
+          
+          # Se quiser KPM (Kernel Patch Modules) - descomente a linha abaixo
+          # echo "CONFIG_KPM=y" >> arch/arm64/configs/$(ls arch/arm64/configs/ | grep -E "(garnet|vendor)" | head -1)
 
-      - name: Compilar Kernel
+      - name: Configure Kernel
         run: |
           cd kernel
-          export PATH="$(pwd)/../clang/bin:${PATH}"
+          # Encontra o arquivo de configuração
+          DEFCONFIG=$(ls arch/arm64/configs/ | grep -E "(garnet|gki|vendor)" | head -1)
+          echo "Using defconfig: $DEFCONFIG"
+          
+          # Prepara o build
           export ARCH=arm64
           export SUBARCH=arm64
-          export CC=clang
           export CROSS_COMPILE=aarch64-linux-gnu-
-          export LLVM=1
-          export LLVM_IAS=1
-
-          # 1. Limpa completamente a arvore de codigo
-          make mrproper
-
-          # 2. Localiza e aplica o defconfig correto do Garnet
-          if [ -f arch/arm64/configs/garnet_defconfig ]; then
-              DEFCONFIG="garnet_defconfig"
-          elif [ -f arch/arm64/configs/vendor/garnet_defconfig ]; then
-              DEFCONFIG="vendor/garnet_defconfig"
-          elif [ -f arch/arm64/configs/vendor/garnet-perf_defconfig ]; then
-              DEFCONFIG="vendor/garnet-perf_defconfig"
-          else
-              DEFCONFIG="gki_defconfig"
-          fi
-
-          echo "Usando o defconfig: $DEFCONFIG"
+          
+          # Gera o .config
           make $DEFCONFIG
+          
+          # Habilita SukiSU (já aplicado pelo setup.sh)
+          # Habilita KPM se quiser
+          # echo "CONFIG_KPM=y" >> .config
 
-          # 3. Injeta as configs obrigatorias do SukiSU diretamente no .config gerado
-          echo "CONFIG_KSU=y" >> .config
-          echo "CONFIG_KPM=y" >> .config
-          echo "CONFIG_KALLSYMS=y" >> .config
-          echo "CONFIG_KALLSYMS_ALL=y" >> .config
-
-          # 4. Inicia a compilacao na propria pasta
-          make -j$(nproc --all)
-
-      - name: Empacotar no AnyKernel3
+      - name: Build Kernel
         run: |
-          git clone https://github.com/osm0sis/AnyKernel3.git AnyKernel3
-          if [ -f kernel/arch/arm64/boot/Image ]; then
-              cp kernel/arch/arm64/boot/Image AnyKernel3/
-          elif [ -f kernel/arch/arm64/boot/Image.gz ]; then
-              cp kernel/arch/arm64/boot/Image.gz AnyKernel3/
+          cd kernel
+          export ARCH=arm64
+          export CROSS_COMPILE=aarch64-linux-gnu-
+          
+          # Compila com todas as threads
+          make -j$(nproc)
+          
+          # Verifica se o Image.gz-dtb foi gerado
+          if [ -f "arch/arm64/boot/Image.gz-dtb" ]; then
+            echo "Kernel built successfully!"
+          else
+            echo "Build failed!"
+            exit 1
           fi
-          cd AnyKernel3
-          zip -r9 SukiSU_Kernel_Garnet_crDroid.zip *
 
-      - name: Enviar Arquivo Final (Artifact)
+      - name: Create AnyKernel3 Package
+        run: |
+          # Clona o AnyKernel3
+          git clone https://github.com/osm0sis/AnyKernel3.git anykernel
+          
+          # Copia o kernel compilado
+          cp kernel/arch/arm64/boot/Image.gz-dtb anykernel/
+          
+          # Cria o arquivo anykernel.sh
+          cat > anykernel/anykernel.sh << 'EOF'
+          #!/sbin/sh
+          #
+          # AnyKernel3 script
+          #
+          properties() {
+            kernel.string=SukiSU Ultra Kernel ${{ github.event.inputs.kernel_version }}
+            do.devicecheck=1
+            do.modules=0
+            do.cleanup=1
+            do.cleanuponabort=0
+            device.name1=${{ github.event.inputs.device_codename }}
+            supported.versions=16
+          }
+          block=/dev/block/bootdevice/by-name/boot
+          is_slot_device=1
+          ramdisk_compression=auto
+          
+          . tools/ak3-core.sh
+          split_boot
+          flash_boot
+          done
+          EOF
+          
+          # Cria o zip
+          cd anykernel
+          zip -r ../SukiSU_Kernel_${{ github.event.inputs.kernel_version }}_${{ github.event.inputs.device_codename }}.zip *
+
+      - name: Upload Kernel Package
         uses: actions/upload-artifact@v4
         with:
-          name: SukiSU_Kernel_Garnet_crDroid
-          path: AnyKernel3/SukiSU_Kernel_Garnet_crDroid.zip
+          name: SukiSU-Kernel-${{ github.event.inputs.kernel_version }}
+          path: SukiSU_Kernel_*.zip
+          retention-days: 30
+
+      - name: Create Release
+        if: github.event_name == 'workflow_dispatch'
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ github.run_number }}
+          name: "SukiSU Kernel ${{ github.event.inputs.kernel_version }} - Build ${{ github.run_number }}"
+          files: SukiSU_Kernel_*.zip
+          draft: false
+          prerelease: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
