@@ -50,8 +50,19 @@ jobs:
           # 1. Limpa completamente a arvore de codigo
           make mrproper
 
-          # 2. Gera a configuracao padrao do Garnet
-          make garnet_defconfig
+          # 2. Localiza e aplica o defconfig correto do Garnet
+          if [ -f arch/arm64/configs/garnet_defconfig ]; then
+              DEFCONFIG="garnet_defconfig"
+          elif [ -f arch/arm64/configs/vendor/garnet_defconfig ]; then
+              DEFCONFIG="vendor/garnet_defconfig"
+          elif [ -f arch/arm64/configs/vendor/garnet-perf_defconfig ]; then
+              DEFCONFIG="vendor/garnet-perf_defconfig"
+          else
+              DEFCONFIG="gki_defconfig"
+          fi
+
+          echo "Usando o defconfig: $DEFCONFIG"
+          make $DEFCONFIG
 
           # 3. Injeta as configs obrigatorias do SukiSU diretamente no .config gerado
           echo "CONFIG_KSU=y" >> .config
@@ -65,7 +76,11 @@ jobs:
       - name: Empacotar no AnyKernel3
         run: |
           git clone https://github.com/osm0sis/AnyKernel3.git AnyKernel3
-          cp kernel/arch/arm64/boot/Image AnyKernel3/
+          if [ -f kernel/arch/arm64/boot/Image ]; then
+              cp kernel/arch/arm64/boot/Image AnyKernel3/
+          elif [ -f kernel/arch/arm64/boot/Image.gz ]; then
+              cp kernel/arch/arm64/boot/Image.gz AnyKernel3/
+          fi
           cd AnyKernel3
           zip -r9 SukiSU_Kernel_Garnet_crDroid.zip *
 
