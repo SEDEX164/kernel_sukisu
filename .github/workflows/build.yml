@@ -1,0 +1,60 @@
+name: Compilar Kernel SukiSU Garnet
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Aumentar Espaço em Disco
+        uses: easimon/maximize-build-space@v10
+        with:
+          root-reserve-mb: 8192
+          temp-reserve-mb: 2048
+          remove-dotnet: 'true'
+          remove-android: 'true'
+
+      - name: Instalar Dependências
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libssl-dev libncurses5-dev bison flex libelf-dev bc zip unzip curl git python3
+
+      - name: Baixar Código Fonte do Kernel
+        run: |
+          git clone --depth=1 https://github.com/kernel-devs/android_kernel_xiaomi_garnet.git -b lineage-21 kernel
+
+      - name: Baixar Toolchain (Clang)
+        run: |
+          git clone https://github.com/kdrag0n/proton-clang.git --depth=1 clang
+
+      - name: Integrar SukiSU Ultra
+        run: |
+          cd kernel
+          curl -LSs "https://raw.githubusercontent.com/sukisu-ultra/sukisu-ultra/main/kernel/setup.sh" | bash -
+
+      - name: Compilar Kernel
+        run: |
+          cd kernel
+          export ARCH=arm64
+          export SUBARCH=arm64
+          export CC=$(pwd)/../clang/bin/clang
+          export PATH="$(pwd)/../clang/bin:$PATH"
+          export CROSS_COMPILE=aarch64-linux-gnu-
+          
+          make mrproper
+          make garnet_defconfig
+          make -j$(nproc --all) O=out
+
+      - name: Empacotar no AnyKernel3
+        run: |
+          git clone https://github.com/osm0sis/AnyKernel3.git AnyKernel3
+          cp kernel/out/arch/arm64/boot/Image AnyKernel3/
+          cd AnyKernel3
+          zip -r9 SukiSU_Kernel_Garnet.zip *
+
+      - name: Enviar Arquivo Final (Artifact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: SukiSU_Kernel_Garnet
+          path: AnyKernel3/SukiSU_Kernel_Garnet.zip
